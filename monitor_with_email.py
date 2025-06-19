@@ -6,9 +6,11 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
 from email import encoders
-from picamera2 import Picamera2
+from picamera import PiCamera
+from PIL import Image
 import board, digitalio
 from dotenv import load_dotenv
+import numpy as np
 
 # load SMTP settings from .env
 load_dotenv()
@@ -28,12 +30,22 @@ os.makedirs(OUT_DIR, exist_ok=True)
 # setup sensors and camera
 mq2 = digitalio.DigitalInOut(board.D17); mq2.direction = digitalio.Direction.INPUT
 flame = digitalio.DigitalInOut(board.D27); flame.direction = digitalio.Direction.INPUT
-picam2 = Picamera2()
-cfg = picam2.create_preview_configuration(main={"format":"RGB888","size":(640,480)})
-picam2.configure(cfg)
-picam2.start()
+camera = PiCamera()
+camera.resolution = (640, 480)
+camera.start_preview()
+time.sleep(2)
 
 buffer = deque(maxlen=BUFFER_SIZE)
+
+def capture_roi():
+    stream = io.BytesIO()
+    camera.capture(stream, format='jpeg')
+    stream.seek(0)
+    img = Image.open(stream).convert("RGB")
+    np_img = np.array(img)
+    x, y, w, h = ROI
+    roi = np_img[y:y+h, x:x+w].copy()
+    return roi
 
 def send_event_email(event_type, zip_bytes):
     msg = MIMEMultipart()
@@ -52,23 +64,18 @@ def send_event_email(event_type, zip_bytes):
         s.send_message(msg)
 
 def save_event(event_type, entries):
-    # save zip to disk
     zip_path = os.path.join(OUT_DIR, f"{event_type}_{entries[-1]['ts'].replace(' ', 'T')}.zip")
     with zipfile.ZipFile(zip_path, "w") as zf:
         for i, e in enumerate(entries):
             fn = f"{event_type}_{i+1}_{e['ts'].replace(' ', 'T')}.jpg"
             img_path = os.path.join(OUT_DIR, fn)
-            from PIL import Image
             Image.fromarray(e["img"]).save(img_path)
             zf.write(img_path, arcname=fn)
-    # send email with zip
     with io.BytesIO() as buf:
         with zipfile.ZipFile(buf, "w") as zf:
             for i, e in enumerate(entries):
                 fn = f"{event_type}_{i+1}_{e['ts'].replace(' ', 'T')}.jpg"
-                img_arr = e["img"]
-                from PIL import Image
-                im = Image.fromarray(img_arr)
+                im = Image.fromarray(e["img"])
                 with io.BytesIO() as img_buf:
                     im.save(img_buf, format="JPEG")
                     zf.writestr(fn, img_buf.getvalue())
@@ -79,9 +86,7 @@ print(f"Monitoring... buffer size={BUFFER_SIZE}, interval={CAP_INTERVAL}s")
 try:
     while True:
         ts = datetime.now().isoformat(sep=" ", timespec="seconds")
-        frame = picam2.capture_array()
-        x,y,w,h = ROI
-        roi = frame[y:y+h, x:x+w].copy()
+        roi = capture_roi()
         smoke = not mq2.value
         fire  = not flame.value
         entry = {"ts": ts, "img": roi, "smoke": smoke, "fire": fire}
@@ -95,4 +100,4 @@ try:
 except KeyboardInterrupt:
     print("Stopped.")
 finally:
-    picam2.stop()
+    camera.close()

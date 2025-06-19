@@ -1,3 +1,4 @@
 captures/*.jpg
 captures/*.zip
 .env
+__pycache__/
