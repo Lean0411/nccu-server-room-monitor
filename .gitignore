@@ -1,4 +1,27 @@
+# 監控資料
 captures/*.jpg
 captures/*.zip
+
+# 環境設定
 .env
+
+# Python 快取
 __pycache__/
+*.pyc
+*.pyo
+
+# 日誌檔案
+logs/
+*.log
+
+# 系統檔案
+.DS_Store
+Thumbs.db
+
+# 臨時檔案
+*.tmp
+*.swp
+*~
+
+# PID 檔案
+*.pid

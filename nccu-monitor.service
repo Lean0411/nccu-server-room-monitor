@@ -1,0 +1,33 @@
+[Unit]
+Description=NCCU Server Room Monitor
+Documentation=https://github.com/Lean0411/nccu-server-room-monitor
+After=multi-user.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/monitor
+ExecStart=/usr/bin/python3 /home/pi/monitor/monitor_daemon.py
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# 環境變數
+Environment=PYTHONPATH=/home/pi/monitor
+Environment=HOME=/home/pi
+
+# 安全設定
+NoNewPrivileges=true
+PrivateTmp=true
+
+# 資源限制
+MemoryMax=1G
+CPUQuota=80%
+
+[Install]
+WantedBy=multi-user.target
