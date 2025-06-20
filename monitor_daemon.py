@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-NCCU 機房監控系統 - 守護程序版本
-專為長期背景運作設計，具備自動重啟和錯誤恢復機制
+NCCU 機房監控系統 - 優化版本
+效能改進、記憶體優化、更好的錯誤處理
 """
 
 import os
@@ -10,26 +10,38 @@ import time
 import signal
 import logging
 import traceback
+import threading
+import queue
 from datetime import datetime
 from pathlib import Path
+from logging.handlers import RotatingFileHandler
+from contextlib import contextmanager
 
 # 確保在正確的目錄下運行
 SCRIPT_DIR = Path(__file__).parent
 os.chdir(SCRIPT_DIR)
 
-# 設定日誌系統
+# 設定日誌系統 - 使用 RotatingFileHandler 防止日誌檔案過大
 LOG_DIR = SCRIPT_DIR / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_DIR / "monitor.log"),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# 檔案處理器 - 最大 10MB，保留 5 個備份
+file_handler = RotatingFileHandler(
+    LOG_DIR / "monitor.log",
+    maxBytes=10*1024*1024,  # 10MB
+    backupCount=5
+)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+# 控制台處理器
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
 
 # 全域變數
 running = True
@@ -43,7 +55,7 @@ def signal_handler(signum, frame):
     running = False
 
 def import_monitor_modules():
-    """動態導入監控模組"""
+    """動態導入監控模組 - 延遲載入以減少啟動時間"""
     try:
         import io
         import zipfile
@@ -68,12 +80,16 @@ def import_monitor_modules():
             'Image': Image, 'board': board, 'digitalio': digitalio,
             'load_dotenv': load_dotenv, 'np': np
         }
-    except Exception as e:
+    except ImportError as e:
         logger.error(f"模組導入失敗: {e}")
+        logger.error("請確保已安裝所有必要的套件")
+        return None
+    except Exception as e:
+        logger.error(f"未預期的錯誤: {e}")
         return None
 
 class MonitorSystem:
-    """監控系統核心類別"""
+    """監控系統核心類別 - 優化版"""
     
     def __init__(self):
         self.modules = None
@@ -83,12 +99,32 @@ class MonitorSystem:
         self.buffer = None
         self.smtp_config = {}
         self.fire_count = 0
-        self.fire_threshold = 3  # 需要連續 3 次偵測到火焰才觸發警報
+        self.smoke_count = 0  # 新增煙霧計數器
+        self.fire_threshold = 3
+        self.smoke_threshold = 2  # 煙霧需要 2 次偵測
         self.last_fire_alert = None
-        self.alert_cooldown = 300  # 5 分鐘內不重複發送同類型警報
+        self.last_smoke_alert = None
+        self.alert_cooldown = 300
         
+        # 效能優化：使用執行緒池處理郵件發送
+        self.alert_queue = None
+        self.alert_thread = None
+        
+        # 記憶體優化：限制同時保存的影像檔案數量
+        self.max_saved_images = 100
+        self.saved_image_count = 0
+        
+    @contextmanager
+    def camera_capture(self):
+        """使用 context manager 確保資源正確釋放"""
+        stream = self.modules['io'].BytesIO()
+        try:
+            yield stream
+        finally:
+            stream.close()
+            
     def initialize(self):
-        """初始化系統"""
+        """初始化系統 - 加入更多錯誤檢查"""
         try:
             # 導入模組
             self.modules = import_monitor_modules()
@@ -98,27 +134,33 @@ class MonitorSystem:
             # 載入環境變數
             self.modules['load_dotenv']()
             
-            # SMTP 設定
+            # SMTP 設定 - 驗證必要參數
+            required_smtp_vars = ["SMTP_HOST", "SMTP_USER", "SMTP_PASS", "ALERT_TO"]
+            missing_vars = [var for var in required_smtp_vars if not os.getenv(var)]
+            
+            if missing_vars:
+                logger.warning(f"缺少 SMTP 設定: {', '.join(missing_vars)}")
+                logger.warning("警報功能將被停用")
+            
             self.smtp_config = {
-                'HOST': os.getenv("SMTP_HOST"),
+                'HOST': os.getenv("SMTP_HOST", ""),
                 'PORT': int(os.getenv("SMTP_PORT", 587)),
-                'USER': os.getenv("SMTP_USER"),
-                'PASS': os.getenv("SMTP_PASS"),
-                'ALERT_TO': os.getenv("ALERT_TO")
+                'USER': os.getenv("SMTP_USER", ""),
+                'PASS': os.getenv("SMTP_PASS", ""),
+                'ALERT_TO': os.getenv("ALERT_TO", "")
             }
             
-            # 檢查必要設定
-            if not all(self.smtp_config.values()):
-                logger.warning("SMTP 設定不完整，警報功能可能無法使用")
-            
-            # 監控參數
-            self.BUFFER_SIZE = 20
-            self.CAP_INTERVAL = 5
-            self.ROI = (100, 80, 200, 150)
-            self.OUT_DIR = "captures"
+            # 監控參數 - 可從環境變數設定
+            self.BUFFER_SIZE = int(os.getenv("BUFFER_SIZE", 20))
+            self.CAP_INTERVAL = int(os.getenv("CAP_INTERVAL", 5))
+            self.ROI = tuple(map(int, os.getenv("ROI", "100,80,200,150").split(",")))
+            self.OUT_DIR = os.getenv("OUT_DIR", "captures")
             
             # 建立輸出目錄
             os.makedirs(self.OUT_DIR, exist_ok=True)
+            
+            # 清理舊檔案（保留最近 7 天）
+            self._cleanup_old_files()
             
             # 初始化感測器
             board = self.modules['board']
@@ -130,16 +172,22 @@ class MonitorSystem:
             self.flame = digitalio.DigitalInOut(board.D27)
             self.flame.direction = digitalio.Direction.INPUT
             
-            # 初始化攝影機
+            # 初始化攝影機 - 使用較低解析度以節省記憶體
             self.camera = self.modules['PiCamera']()
             self.camera.resolution = (640, 480)
             self.camera.start_preview()
-            time.sleep(2)
+            time.sleep(2)  # 等待攝影機穩定
             
             # 初始化緩衝區
             self.buffer = self.modules['deque'](maxlen=self.BUFFER_SIZE)
             
+            # 初始化警報佇列和執行緒
+            self.alert_queue = queue.Queue()
+            self.alert_thread = threading.Thread(target=self._alert_worker, daemon=True)
+            self.alert_thread.start()
+            
             logger.info("系統初始化完成")
+            logger.info(f"監控參數: BUFFER_SIZE={self.BUFFER_SIZE}, CAP_INTERVAL={self.CAP_INTERVAL}, ROI={self.ROI}")
             return True
             
         except Exception as e:
@@ -147,23 +195,72 @@ class MonitorSystem:
             logger.error(traceback.format_exc())
             return False
     
-    def capture_roi(self):
-        """擷取 ROI 區域影像"""
+    def _cleanup_old_files(self):
+        """清理舊的監控檔案"""
         try:
-            stream = self.modules['io'].BytesIO()
-            self.camera.capture(stream, format='jpeg')
-            stream.seek(0)
-            img = self.modules['Image'].open(stream).convert("RGB")
-            np_img = self.modules['np'].array(img)
-            x, y, w, h = self.ROI
-            roi = np_img[y:y+h, x:x+w].copy()
-            return roi
+            import glob
+            from datetime import timedelta
+            
+            cutoff_time = time.time() - (7 * 24 * 60 * 60)  # 7 天前
+            
+            for pattern in ["*.jpg", "*.zip"]:
+                for filepath in glob.glob(os.path.join(self.OUT_DIR, pattern)):
+                    if os.path.getmtime(filepath) < cutoff_time:
+                        os.remove(filepath)
+                        logger.info(f"已刪除舊檔案: {filepath}")
+                        
+        except Exception as e:
+            logger.warning(f"清理舊檔案時發生錯誤: {e}")
+    
+    def capture_roi(self):
+        """擷取 ROI 區域影像 - 優化記憶體使用"""
+        try:
+            with self.camera_capture() as stream:
+                self.camera.capture(stream, format='jpeg', use_video_port=True)  # 使用 video port 加速
+                stream.seek(0)
+                
+                # 只在需要時載入完整影像
+                img = self.modules['Image'].open(stream)
+                
+                # 直接裁切 ROI 區域，避免載入整張影像到 numpy
+                x, y, w, h = self.ROI
+                roi_img = img.crop((x, y, x+w, y+h))
+                
+                # 轉換為 numpy array
+                return self.modules['np'].array(roi_img)
+                
         except Exception as e:
             logger.error(f"影像擷取失敗: {e}")
             return None
     
+    def _alert_worker(self):
+        """背景執行緒處理警報發送"""
+        while True:
+            try:
+                alert_data = self.alert_queue.get()
+                if alert_data is None:  # 停止信號
+                    break
+                    
+                self._send_alert_internal(alert_data['event_type'], 
+                                        alert_data['zip_bytes'], 
+                                        alert_data['entries'])
+                                        
+            except Exception as e:
+                logger.error(f"警報處理錯誤: {e}")
+    
     def send_alert(self, event_type, zip_bytes, entries):
-        """發送警報郵件"""
+        """將警報加入佇列（非阻塞）"""
+        try:
+            self.alert_queue.put({
+                'event_type': event_type,
+                'zip_bytes': zip_bytes,
+                'entries': entries
+            })
+        except Exception as e:
+            logger.error(f"加入警報佇列失敗: {e}")
+    
+    def _send_alert_internal(self, event_type, zip_bytes, entries):
+        """實際發送警報郵件"""
         try:
             if not all(self.smtp_config.values()):
                 logger.warning("SMTP 設定不完整，跳過郵件發送")
@@ -174,59 +271,20 @@ class MonitorSystem:
             msg["From"] = self.smtp_config['USER']
             msg["To"] = self.smtp_config['ALERT_TO']
             
+            # 簡化郵件內容以減少記憶體使用
             body = f"""🚨 NCCU 政治大學機房監控系統 - 緊急警報通知 🚨
 
 偵測位置：NCCU 大仁樓 1F（樓梯旁）機房
 事件類型：{event_type} 
 偵測時間：{datetime.now().strftime('%Y年%m月%d日 %H時%M分%S秒')}
+附件影像：{len(entries)} 張
 
-⚠️  警報詳情：
-系統偵測到機房內有異常{event_type}反應，請立即派員前往現場查看！
+請立即前往現場查看！
 
-📍 機房位置：
-- 建築物：大仁樓
-- 樓層：1樓
-- 位置：樓梯旁機房
+緊急聯絡人：李恩甫同學 (0958-242-580)
 
-📞 緊急聯絡人：
-李恩甫同學
-電話：0958-242-580
-
-📷 監控影像說明：
-附件中包含 {len(entries)} 張連續拍攝的監控照片，完整記錄了警報觸發前後的現場狀況：
-
-• 第 1 張照片：警報觸發前 {self.BUFFER_SIZE-1} 秒的正常狀態
-• 第 2-{len(entries)-1} 張照片：異常狀況逐步發展的過程
-• 第 {len(entries)} 張照片：警報觸發當下的現場畫面
-
-請仔細查看這些連續的監控照片，特別注意以下幾點：
-✓ 是否有明顯的煙霧或火光出現
-✓ 機房設備是否有異常狀況（如冒煙、火花等）
-✓ 環境光線、顏色是否有明顯變化
-✓ 是否有人員在現場
-
-這些照片以每秒一張的頻率連續拍攝，可以清楚看出事件的發展過程。
-
-📋 緊急處理步驟：
-1. 立即前往現場查看機房狀況
-2. 確認是否有實際火災或煙霧
-3. 如有緊急情況，請立即撥打119
-4. 檢查所有機房設備是否正常運作
-5. 處理完畢後請回報系統管理員處理結果
-
-📎 附件說明：
-本郵件附件為 ZIP 壓縮檔，包含警報觸發時的完整監控影像記錄。
-• 檔案名稱：{event_type}_alert.zip
-• 檔案內容：{len(entries)} 張 JPG 格式的高清監控照片
-• 照片解析度：根據攝影機設定
-• 拍攝時間：每張照片檔名包含精確時間戳記
-
-⚠️ 重要提醒：
-此為自動發送的警報郵件，系統將持續監控機房狀況。
-若您無法查看附件或需要更多協助，請立即聯繫系統管理員。
-
-NCCU 機房監控系統
-政治大學資訊科學系"""
+NCCU 機房監控系統"""
+            
             msg.attach(self.modules['MIMEText'](body, "plain"))
             
             # 附加 ZIP 檔案
@@ -236,57 +294,90 @@ NCCU 機房監控系統
             part.add_header("Content-Disposition", f'attachment; filename="{event_type}_alert.zip"')
             msg.attach(part)
             
-            # 發送郵件
-            with self.modules['smtplib'].SMTP(self.smtp_config['HOST'], self.smtp_config['PORT']) as server:
-                server.starttls()
-                server.login(self.smtp_config['USER'], self.smtp_config['PASS'])
-                server.send_message(msg)
-                
-            logger.info(f"警報郵件已發送: {event_type}")
-            
+            # 發送郵件 - 加入重試機制
+            retry_count = 3
+            for i in range(retry_count):
+                try:
+                    with self.modules['smtplib'].SMTP(self.smtp_config['HOST'], self.smtp_config['PORT']) as server:
+                        server.starttls()
+                        server.login(self.smtp_config['USER'], self.smtp_config['PASS'])
+                        server.send_message(msg)
+                    logger.info(f"警報郵件已發送: {event_type}")
+                    break
+                except Exception as e:
+                    if i < retry_count - 1:
+                        logger.warning(f"郵件發送失敗，重試 {i+1}/{retry_count}: {e}")
+                        time.sleep(5)
+                    else:
+                        raise
+                        
         except Exception as e:
             logger.error(f"郵件發送失敗: {e}")
     
     def save_event(self, event_type, entries):
-        """保存事件記錄"""
+        """保存事件記錄 - 優化 I/O 操作"""
         try:
+            # 檢查磁碟空間
+            if not self._check_disk_space():
+                logger.warning("磁碟空間不足，跳過保存")
+                return
+                
             timestamp = entries[-1]['ts'].replace(' ', 'T')
             zip_path = os.path.join(self.OUT_DIR, f"{event_type}_{timestamp}.zip")
             
-            # 保存到磁碟
-            with self.modules['zipfile'].ZipFile(zip_path, "w") as zf:
-                for i, e in enumerate(entries):
-                    fn = f"{event_type}_{i+1}_{e['ts'].replace(' ', 'T')}.jpg"
-                    img_path = os.path.join(self.OUT_DIR, fn)
-                    self.modules['Image'].fromarray(e["img"]).save(img_path)
-                    zf.write(img_path, arcname=fn)
-            
-            # 建立記憶體 ZIP 用於郵件
+            # 使用記憶體緩衝區減少 I/O
             with self.modules['io'].BytesIO() as buf:
-                with self.modules['zipfile'].ZipFile(buf, "w") as zf:
+                with self.modules['zipfile'].ZipFile(buf, "w", compression=self.modules['zipfile'].ZIP_DEFLATED) as zf:
                     for i, e in enumerate(entries):
                         fn = f"{event_type}_{i+1}_{e['ts'].replace(' ', 'T')}.jpg"
                         im = self.modules['Image'].fromarray(e["img"])
                         with self.modules['io'].BytesIO() as img_buf:
-                            im.save(img_buf, format="JPEG")
+                            im.save(img_buf, format="JPEG", quality=85)  # 降低品質以節省空間
                             zf.writestr(fn, img_buf.getvalue())
                 
-                # 發送警報
+                # 保存到磁碟
+                buf.seek(0)
+                with open(zip_path, 'wb') as f:
+                    f.write(buf.getvalue())
+                
+                # 發送警報（非阻塞）
+                buf.seek(0)
                 self.send_alert(event_type, buf, entries)
                 
             logger.info(f"事件已保存: {event_type} - {len(entries)} 張影像")
             
+            # 更新計數器
+            self.saved_image_count += len(entries)
+            if self.saved_image_count > self.max_saved_images:
+                self._cleanup_old_files()
+                self.saved_image_count = 0
+                
         except Exception as e:
             logger.error(f"事件保存失敗: {e}")
     
+    def _check_disk_space(self):
+        """檢查磁碟空間"""
+        try:
+            stat = os.statvfs(self.OUT_DIR)
+            free_mb = (stat.f_bavail * stat.f_frsize) / 1024 / 1024
+            return free_mb > 100  # 至少需要 100MB 空間
+        except:
+            return True  # 如果無法檢查，假設有足夠空間
+    
     def monitor_loop(self):
-        """主要監控迴圈"""
+        """主要監控迴圈 - 優化版"""
         global running
         
         logger.info("開始監控...")
         
+        # 效能計數器
+        loop_count = 0
+        last_stats_time = time.time()
+        
         while running:
             try:
+                loop_start = time.time()
+                
                 # 取得時間戳記
                 ts = datetime.now().isoformat(sep=" ", timespec="seconds")
                 
@@ -304,12 +395,21 @@ NCCU 機房監控系統
                 entry = {"ts": ts, "img": roi, "smoke": smoke, "fire": fire}
                 self.buffer.append(entry)
                 
-                # 處理火焰偵測（需要連續多次偵測才觸發）
+                # 處理火焰偵測
                 if fire:
                     self.fire_count += 1
-                    logger.info(f"偵測到火焰信號 ({self.fire_count}/{self.fire_threshold})")
+                    if self.fire_count <= self.fire_threshold:
+                        logger.info(f"偵測到火焰信號 ({self.fire_count}/{self.fire_threshold})")
                 else:
-                    self.fire_count = 0  # 重置計數器
+                    self.fire_count = 0
+                
+                # 處理煙霧偵測
+                if smoke:
+                    self.smoke_count += 1
+                    if self.smoke_count <= self.smoke_threshold:
+                        logger.info(f"偵測到煙霧信號 ({self.smoke_count}/{self.smoke_threshold})")
+                else:
+                    self.smoke_count = 0
                 
                 # 檢查是否需要發送警報
                 current_time = time.time()
@@ -317,23 +417,36 @@ NCCU 機房監控系統
                                    (self.last_fire_alert is None or 
                                     current_time - self.last_fire_alert > self.alert_cooldown))
                 
-                # 檢查警報條件
-                if smoke or should_alert_fire:
+                should_alert_smoke = (self.smoke_count >= self.smoke_threshold and 
+                                    (self.last_smoke_alert is None or 
+                                     current_time - self.last_smoke_alert > self.alert_cooldown))
+                
+                # 處理警報
+                if should_alert_fire or should_alert_smoke:
                     if should_alert_fire:
                         event_type = "FIRE"
                         self.last_fire_alert = current_time
-                        self.fire_count = 0  # 重置計數器
+                        self.fire_count = 0
                     else:
                         event_type = "SMOKE"
+                        self.last_smoke_alert = current_time
+                        self.smoke_count = 0
                     
                     logger.warning(f"偵測到 {event_type}！正在保存記錄...")
                     self.save_event(event_type, list(self.buffer))
                 
-                # 記錄狀態（每 10 次記錄一次以免日誌過多）
-                if len(self.buffer) % 10 == 0:
-                    logger.info(f"系統正常運作 - 緩衝區: {len(self.buffer)}/{self.BUFFER_SIZE}")
+                # 統計資訊（每分鐘記錄一次）
+                loop_count += 1
+                if current_time - last_stats_time > 60:
+                    fps = loop_count / (current_time - last_stats_time)
+                    logger.info(f"系統狀態 - FPS: {fps:.2f}, 緩衝區: {len(self.buffer)}/{self.BUFFER_SIZE}")
+                    loop_count = 0
+                    last_stats_time = current_time
                 
-                time.sleep(self.CAP_INTERVAL)
+                # 動態調整延遲以維持穩定的擷取間隔
+                loop_time = time.time() - loop_start
+                sleep_time = max(0, self.CAP_INTERVAL - loop_time)
+                time.sleep(sleep_time)
                 
             except KeyboardInterrupt:
                 logger.info("收到中斷信號")
@@ -341,14 +454,28 @@ NCCU 機房監控系統
             except Exception as e:
                 logger.error(f"監控迴圈錯誤: {e}")
                 logger.error(traceback.format_exc())
-                time.sleep(5)  # 錯誤後稍等再繼續
+                time.sleep(5)
     
     def cleanup(self):
         """清理資源"""
         try:
+            # 停止警報執行緒
+            if self.alert_queue:
+                self.alert_queue.put(None)
+                if self.alert_thread and self.alert_thread.is_alive():
+                    self.alert_thread.join(timeout=5)
+            
+            # 關閉攝影機
             if self.camera:
                 self.camera.close()
                 logger.info("攝影機已關閉")
+                
+            # 清理感測器
+            if self.mq2:
+                self.mq2.deinit()
+            if self.flame:
+                self.flame.deinit()
+                
         except Exception as e:
             logger.error(f"清理失敗: {e}")
 
@@ -360,7 +487,7 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
     
-    logger.info("NCCU 機房監控系統啟動")
+    logger.info("NCCU 機房監控系統啟動（優化版）")
     logger.info(f"PID: {os.getpid()}")
     
     while running and restart_count < max_restarts:
