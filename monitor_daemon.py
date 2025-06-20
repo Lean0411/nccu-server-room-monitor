@@ -82,6 +82,10 @@ class MonitorSystem:
         self.flame = None
         self.buffer = None
         self.smtp_config = {}
+        self.fire_count = 0
+        self.fire_threshold = 3  # 需要連續 3 次偵測到火焰才觸發警報
+        self.last_fire_alert = None
+        self.alert_cooldown = 300  # 5 分鐘內不重複發送同類型警報
         
     def initialize(self):
         """初始化系統"""
@@ -158,7 +162,7 @@ class MonitorSystem:
             logger.error(f"影像擷取失敗: {e}")
             return None
     
-    def send_alert(self, event_type, zip_bytes):
+    def send_alert(self, event_type, zip_bytes, entries):
         """發送警報郵件"""
         try:
             if not all(self.smtp_config.values()):
@@ -166,11 +170,63 @@ class MonitorSystem:
                 return
                 
             msg = self.modules['MIMEMultipart']()
-            msg["Subject"] = f"[NCCU 機房警報] {event_type} detected at {datetime.now().isoformat()}"
+            msg["Subject"] = f"🚨【緊急警報】NCCU 大仁樓 1F 機房偵測到 {event_type} - {datetime.now().strftime('%Y/%m/%d %H:%M:%S')}"
             msg["From"] = self.smtp_config['USER']
             msg["To"] = self.smtp_config['ALERT_TO']
             
-            body = f"NCCU 機房監控系統偵測到 {event_type}，請立即檢查！\n\n附件包含事件發生時的影像記錄。"
+            body = f"""🚨 NCCU 政治大學機房監控系統 - 緊急警報通知 🚨
+
+偵測位置：NCCU 大仁樓 1F（樓梯旁）機房
+事件類型：{event_type} 
+偵測時間：{datetime.now().strftime('%Y年%m月%d日 %H時%M分%S秒')}
+
+⚠️  警報詳情：
+系統偵測到機房內有異常{event_type}反應，請立即派員前往現場查看！
+
+📍 機房位置：
+- 建築物：大仁樓
+- 樓層：1樓
+- 位置：樓梯旁機房
+
+📞 緊急聯絡人：
+李恩甫同學
+電話：0958-242-580
+
+📷 監控影像說明：
+附件中包含 {len(entries)} 張連續拍攝的監控照片，完整記錄了警報觸發前後的現場狀況：
+
+• 第 1 張照片：警報觸發前 {self.BUFFER_SIZE-1} 秒的正常狀態
+• 第 2-{len(entries)-1} 張照片：異常狀況逐步發展的過程
+• 第 {len(entries)} 張照片：警報觸發當下的現場畫面
+
+請仔細查看這些連續的監控照片，特別注意以下幾點：
+✓ 是否有明顯的煙霧或火光出現
+✓ 機房設備是否有異常狀況（如冒煙、火花等）
+✓ 環境光線、顏色是否有明顯變化
+✓ 是否有人員在現場
+
+這些照片以每秒一張的頻率連續拍攝，可以清楚看出事件的發展過程。
+
+📋 緊急處理步驟：
+1. 立即前往現場查看機房狀況
+2. 確認是否有實際火災或煙霧
+3. 如有緊急情況，請立即撥打119
+4. 檢查所有機房設備是否正常運作
+5. 處理完畢後請回報系統管理員處理結果
+
+📎 附件說明：
+本郵件附件為 ZIP 壓縮檔，包含警報觸發時的完整監控影像記錄。
+• 檔案名稱：{event_type}_alert.zip
+• 檔案內容：{len(entries)} 張 JPG 格式的高清監控照片
+• 照片解析度：根據攝影機設定
+• 拍攝時間：每張照片檔名包含精確時間戳記
+
+⚠️ 重要提醒：
+此為自動發送的警報郵件，系統將持續監控機房狀況。
+若您無法查看附件或需要更多協助，請立即聯繫系統管理員。
+
+NCCU 機房監控系統
+政治大學資訊科學系"""
             msg.attach(self.modules['MIMEText'](body, "plain"))
             
             # 附加 ZIP 檔案
@@ -216,7 +272,7 @@ class MonitorSystem:
                             zf.writestr(fn, img_buf.getvalue())
                 
                 # 發送警報
-                self.send_alert(event_type, buf)
+                self.send_alert(event_type, buf, entries)
                 
             logger.info(f"事件已保存: {event_type} - {len(entries)} 張影像")
             
@@ -248,9 +304,28 @@ class MonitorSystem:
                 entry = {"ts": ts, "img": roi, "smoke": smoke, "fire": fire}
                 self.buffer.append(entry)
                 
+                # 處理火焰偵測（需要連續多次偵測才觸發）
+                if fire:
+                    self.fire_count += 1
+                    logger.info(f"偵測到火焰信號 ({self.fire_count}/{self.fire_threshold})")
+                else:
+                    self.fire_count = 0  # 重置計數器
+                
+                # 檢查是否需要發送警報
+                current_time = time.time()
+                should_alert_fire = (self.fire_count >= self.fire_threshold and 
+                                   (self.last_fire_alert is None or 
+                                    current_time - self.last_fire_alert > self.alert_cooldown))
+                
                 # 檢查警報條件
-                if smoke or fire:
-                    event_type = "SMOKE" if smoke else "FIRE"
+                if smoke or should_alert_fire:
+                    if should_alert_fire:
+                        event_type = "FIRE"
+                        self.last_fire_alert = current_time
+                        self.fire_count = 0  # 重置計數器
+                    else:
+                        event_type = "SMOKE"
+                    
                     logger.warning(f"偵測到 {event_type}！正在保存記錄...")
                     self.save_event(event_type, list(self.buffer))
                 
