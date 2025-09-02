@@ -1,0 +1,48 @@
+# Development dependencies
+# Includes all base requirements plus development tools
+
+-r base.txt
+
+# Testing
+pytest>=7.4.3
+pytest-cov>=4.1.0
+pytest-asyncio>=0.21.1
+pytest-mock>=3.12.0
+pytest-timeout>=2.2.0
+coverage[toml]>=7.3.2
+tox>=4.11.4
+
+# Code quality
+black>=23.11.0
+flake8>=6.1.0
+flake8-docstrings>=1.7.0
+flake8-annotations>=3.0.1
+isort>=5.12.0
+mypy>=1.7.1
+pylint>=3.0.3
+bandit[toml]>=1.7.5
+
+# Type stubs
+types-PyYAML>=6.0.12
+types-requests>=2.31.0
+
+# Documentation
+sphinx>=7.2.6
+sphinx-rtd-theme>=2.0.0
+sphinx-autodoc-typehints>=1.25.2
+myst-parser>=2.0.0
+
+# Development tools
+ipython>=8.18.0
+ipdb>=0.13.13
+pre-commit>=3.5.0
+commitizen>=3.13.0
+
+# Performance profiling
+memory-profiler>=0.61.0
+line-profiler>=4.1.1
+py-spy>=0.3.14
+
+# Debugging
+remote-pdb>=2.1.0
+watchdog>=3.0.0

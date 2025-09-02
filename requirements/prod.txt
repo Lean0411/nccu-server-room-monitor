@@ -1,0 +1,27 @@
+# Production dependencies
+# Optimized for production deployment
+
+-r base.txt
+
+# Production monitoring
+prometheus-client>=0.19.0
+opentelemetry-api>=1.21.0
+opentelemetry-sdk>=1.21.0
+opentelemetry-exporter-prometheus>=0.42b0
+
+# Performance
+uvloop>=0.19.0  # For async optimization
+orjson>=3.9.10  # Fast JSON processing
+
+# Security
+cryptography>=41.0.7
+
+# System monitoring
+watchdog>=3.0.0
+
+# Error tracking (optional - uncomment if using)
+# sentry-sdk>=1.39.1
+
+# Production server (if API is added)
+# gunicorn>=21.2.0
+# uvicorn[standard]>=0.24.0

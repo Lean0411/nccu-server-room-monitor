@@ -1,0 +1,28 @@
+# Base dependencies for NCCU Server Room Monitor
+# Python 3.9+ required
+
+# Core dependencies
+python-dotenv>=1.0.0
+PyYAML>=6.0.1
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Hardware interfaces
+picamera>=1.13
+Pillow>=10.1.0
+numpy>=1.24.0
+adafruit-blinka>=8.25.0
+adafruit-circuitpython-dht>=3.7.0
+adafruit-circuitpython-digitalio>=3.2.0
+RPi.GPIO>=0.7.1
+
+# Communication
+secure-smtplib>=0.1.1
+
+# Utilities
+psutil>=5.9.6
+structlog>=23.2.0
+python-json-logger>=2.0.7
+
+# Data processing
+pandas>=2.1.0

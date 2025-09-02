@@ -1,0 +1,90 @@
+# NCCU Server Room Monitor Configuration
+# This file contains all configuration settings for the monitoring system
+
+# Environment setting (development, staging, production)
+environment: production
+debug: false
+
+# SMTP Email Configuration
+smtp:
+  host: smtp.gmail.com
+  port: 587
+  user: ${SMTP_USER}  # Set in environment or .env file
+  password: ${SMTP_PASS}  # Set in environment or .env file
+  use_tls: true
+  timeout: 30
+
+# Alert System Configuration
+alerts:
+  recipients:
+    - admin@nccu.edu.tw
+    - it-team@nccu.edu.tw
+  cooldown_minutes: 5
+  max_retries: 3
+  include_images: true
+  max_image_size_mb: 10.0
+
+# Sensor Configuration
+sensors:
+  # Smoke Sensor (MQ-2)
+  smoke_enabled: true
+  smoke_pin: 17  # GPIO 17
+  smoke_threshold: 2  # Consecutive detections required
+
+  # Flame Sensor
+  flame_enabled: true
+  flame_pin: 27  # GPIO 27
+  flame_threshold: 3  # Consecutive detections required
+
+  # Water Level Sensor
+  water_enabled: true
+  water_pin: 22  # GPIO 22
+
+  # Temperature & Humidity Sensor (DHT22)
+  dht22_enabled: true
+  dht22_pin: 4  # GPIO 4
+  temp_threshold_high: 35.0  # Celsius
+  temp_threshold_low: 10.0   # Celsius
+  humidity_threshold_high: 80.0  # Percentage
+  humidity_threshold_low: 20.0   # Percentage
+
+# Camera Configuration
+camera:
+  enabled: true
+  resolution: 640x480
+  framerate: 30
+  rotation: 0  # Degrees (0, 90, 180, 270)
+  capture_interval: 5.0  # Seconds
+  buffer_size: 20  # Number of frames to keep in buffer
+
+  # Region of Interest (ROI) - Optional
+  use_roi: false
+  roi_x: 100
+  roi_y: 80
+  roi_width: 200
+  roi_height: 150
+
+# Monitor System Configuration
+monitor:
+  interval: 5.0  # Main loop interval in seconds
+  max_memory_mb: 512.0  # Maximum memory usage before cleanup
+  max_cpu_percent: 80.0  # Maximum CPU usage threshold
+  restart_on_error: true
+  max_restarts: 10
+
+# Storage Configuration
+storage:
+  data_dir: data
+  captures_dir: captures
+  logs_dir: logs
+  max_storage_gb: 10.0
+  cleanup_days: 7  # Delete files older than this
+
+# Logging Configuration
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  max_file_size_mb: 10
+  backup_count: 5
+  console_output: true
+  file_output: true
