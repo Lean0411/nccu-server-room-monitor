@@ -1,0 +1,5 @@
+# NCCU Server Room Monitor - Requirements
+# For production use: pip install -r requirements/prod.txt
+# For development: pip install -r requirements/dev.txt
+
+-r requirements/prod.txt
