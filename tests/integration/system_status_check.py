@@ -52,7 +52,7 @@ try:
     sensor = adafruit_ahtx0.AHTx0(i2c)
     temp = sensor.temperature
     humid = sensor.relative_humidity
-    print(f"   GPIO: 4 (使用模擬器)")
+    print(f"   I2C: GPIO 2 (SDA), GPIO 3 (SCL)")
     print(f"   🌡️  溫度: {temp:.1f}°C")
     print(f"   💧 濕度: {humid:.1f}%")
     

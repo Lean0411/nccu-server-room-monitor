@@ -15,7 +15,6 @@ from collections import deque
 
 import board
 import digitalio
-# import adafruit_dht
 from adafruit_ahtx0 import AHTx0
 
 class SensorType(Enum):
@@ -404,30 +403,31 @@ class AHTSensor(BaseSensor):
         self,
         sensor_id: str = "AHT",
         name: str = "AHT Sensor",
-        pin: Any = board.I2C()
+        pin: Optional[Any] = None
     ) -> None:
         """Initialize AHT sensor.
         
         Args:
             sensor_id: Unique identifier
             name: Human-readable name
-            pin: I2C pin (default: (GPIO 2, GPIO 3))
+            pin: I2C interface object (default: creates new I2C instance)
         """
         super().__init__(
             sensor_id=sensor_id,
             sensor_type=SensorType.TEMPERATURE,
             name=name
         )
-        self.pin = pin
+        # Create I2C instance if not provided
+        self.i2c = pin if pin is not None else board.I2C()
         self._setup_sensor()
         
     def _setup_sensor(self) -> None:
-        """Setup DHT22 sensor."""
+        """Setup AHT sensor."""
         try:
-            self.aht = AHTx0(self.pin)
+            self.aht = AHTx0(self.i2c)
             self.status = SensorStatus.OK
         except Exception as e:
-            self.logger.error(f"Failed to setup DHT22: {e}")
+            self.logger.error(f"Failed to setup AHT sensor: {e}")
             self.status = SensorStatus.ERROR
             raise
     
@@ -452,28 +452,42 @@ class AHTSensor(BaseSensor):
         """Read only temperature value."""
         try:
             return self.aht.temperature
+        except (OSError, RuntimeError) as e:
+            self.error_count += 1
+            self.status = SensorStatus.ERROR
+            self.logger.error(f"I2C error reading temperature from {self.name}: {e}")
+            return None
         except Exception as e:
-            self.logger.error(f"Error reading temperature: {e}")
+            self.error_count += 1
+            self.status = SensorStatus.ERROR
+            self.logger.error(f"Unexpected error reading temperature: {e}")
             return None
     
     def read_humidity(self) -> Optional[float]:
         """Read only humidity value."""
         try:
             return self.aht.relative_humidity
+        except (OSError, RuntimeError) as e:
+            self.error_count += 1
+            self.status = SensorStatus.ERROR
+            self.logger.error(f"I2C error reading humidity from {self.name}: {e}")
+            return None
         except Exception as e:
-            self.logger.error(f"Error reading humidity: {e}")
+            self.error_count += 1
+            self.status = SensorStatus.ERROR
+            self.logger.error(f"Unexpected error reading humidity: {e}")
             return None
     
     def validate_reading(self, reading: SensorReading) -> bool:
-        """Validate DHT22 reading."""
+        """Validate AHT reading."""
         if not isinstance(reading.value, dict):
             return False
         
         temp = reading.value.get("temperature")
         humidity = reading.value.get("humidity")
         
-        # Validate temperature range (-40 to 80°C)
-        if temp is None or temp < -40 or temp > 80:
+        # Validate temperature range for AHT sensor (-40 to 85°C)
+        if temp is None or temp < -40 or temp > 85:
             return False
         
         # Validate humidity range (0 to 100%)
@@ -483,8 +497,25 @@ class AHTSensor(BaseSensor):
         return True
     
     def calibrate(self) -> None:
-        """DHT22 doesn't require calibration."""
+        """AHT sensor doesn't require calibration."""
         self.logger.info(f"Calibration not required for {self.name}")
+    
+    def close(self) -> None:
+        """Close I2C connection and cleanup resources."""
+        try:
+            if hasattr(self, 'i2c') and self.i2c is not None:
+                self.i2c.deinit()
+                self.i2c = None
+                self.logger.info(f"Closed I2C connection for {self.name}")
+        except Exception as e:
+            self.logger.warning(f"Error closing I2C connection: {e}")
+    
+    def __del__(self) -> None:
+        """Cleanup I2C resources on deletion."""
+        try:
+            self.close()
+        except:
+            pass  # Ignore errors in destructor
 
 
 class SensorManager:
