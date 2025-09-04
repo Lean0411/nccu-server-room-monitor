@@ -5,7 +5,7 @@
 import board
 import digitalio
 import time
-import dht22_simulator as adafruit_dht
+import adafruit_ahtx0
 from datetime import datetime
 from picamera import PiCamera
 import os
@@ -44,13 +44,14 @@ except Exception as e:
     print(f"   錯誤: {e}")
 
 # 3. 溫濕度感測器
-print("\n3️⃣ 溫濕度 (DHT22)")
+print("\n3️⃣ 溫濕度 (AHT)")
 print("-" * 30)
 try:
-    dht = adafruit_dht.DHT22(board.D4)
-    time.sleep(2)
-    temp = dht.temperature
-    humid = dht.humidity
+    # Create sensor object, communicating over the board's default I2C bus
+    i2c = board.I2C()  # uses board.SCL and board.SDA
+    sensor = adafruit_ahtx0.AHTx0(i2c)
+    temp = sensor.temperature
+    humid = sensor.relative_humidity
     print(f"   GPIO: 4 (使用模擬器)")
     print(f"   🌡️  溫度: {temp:.1f}°C")
     print(f"   💧 濕度: {humid:.1f}%")
@@ -69,7 +70,7 @@ try:
     else:
         comfort = "😐 一般"
     print(f"   舒適度: {comfort}")
-    dht.exit()
+    i2c.deinit()
 except Exception as e:
     print(f"   錯誤: {e}")
 

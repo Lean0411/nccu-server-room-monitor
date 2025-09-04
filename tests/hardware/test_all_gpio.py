@@ -8,8 +8,8 @@ print("=" * 40)
 
 # 測試所有可用的GPIO腳位（排除已知使用的）
 all_pins = [
-    (board.D2, "GPIO 2 (I2C SDA)"),
-    (board.D3, "GPIO 3 (I2C SCL)"),
+    # (board.D2, "GPIO 2 (I2C SDA)"), AHT 跳過
+    # (board.D3, "GPIO 3 (I2C SCL)"), AHT 跳過
     (board.D4, "GPIO 4"),
     (board.D5, "GPIO 5"),
     (board.D6, "GPIO 6"),
@@ -37,7 +37,7 @@ all_pins = [
 ]
 
 print(f"準備測試 {len(all_pins)} 個GPIO腳位...")
-print("注意：GPIO 17（煙霧）和 GPIO 27（火焰）已被使用，跳過測試")
+print("注意：GPIO2(AHT), GPIO3 (AHT), GPIO 17（煙霧）和 GPIO 27（火焰）已被使用，跳過測試")
 print()
 
 # 測試每個腳位

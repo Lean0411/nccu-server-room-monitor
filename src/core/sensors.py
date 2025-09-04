@@ -15,8 +15,8 @@ from collections import deque
 
 import board
 import digitalio
-import adafruit_dht
-
+# import adafruit_dht
+from adafruit_ahtx0 import AHTx0
 
 class SensorType(Enum):
     """感測器類型列舉"""
@@ -397,21 +397,21 @@ class WaterSensor(DigitalSensor):
         )
 
 
-class DHT22Sensor(BaseSensor):
-    """DHT22 Temperature and Humidity sensor implementation."""
+class AHTSensor(BaseSensor):
+    """AHT Temperature and Humidity sensor implementation."""
     
     def __init__(
         self,
-        sensor_id: str = "dht22_1",
-        name: str = "DHT22 Sensor",
-        pin: Any = board.D4
+        sensor_id: str = "AHT",
+        name: str = "AHT Sensor",
+        pin: Any = board.I2C()
     ) -> None:
-        """Initialize DHT22 sensor.
+        """Initialize AHT sensor.
         
         Args:
             sensor_id: Unique identifier
             name: Human-readable name
-            pin: GPIO pin (default: GPIO 4)
+            pin: I2C pin (default: (GPIO 2, GPIO 3))
         """
         super().__init__(
             sensor_id=sensor_id,
@@ -424,7 +424,7 @@ class DHT22Sensor(BaseSensor):
     def _setup_sensor(self) -> None:
         """Setup DHT22 sensor."""
         try:
-            self.dht = adafruit_dht.DHT22(self.pin)
+            self.aht = AHTx0(self.pin)
             self.status = SensorStatus.OK
         except Exception as e:
             self.logger.error(f"Failed to setup DHT22: {e}")
@@ -433,8 +433,8 @@ class DHT22Sensor(BaseSensor):
     
     def read(self) -> SensorReading:
         """Read temperature and humidity."""
-        temperature = self.dht.temperature
-        humidity = self.dht.humidity
+        temperature = self.aht.temperature
+        humidity = self.aht.relative_humidity
         
         return SensorReading(
             timestamp=time.time(),
@@ -451,7 +451,7 @@ class DHT22Sensor(BaseSensor):
     def read_temperature(self) -> Optional[float]:
         """Read only temperature value."""
         try:
-            return self.dht.temperature
+            return self.aht.temperature
         except Exception as e:
             self.logger.error(f"Error reading temperature: {e}")
             return None
@@ -459,7 +459,7 @@ class DHT22Sensor(BaseSensor):
     def read_humidity(self) -> Optional[float]:
         """Read only humidity value."""
         try:
-            return self.dht.humidity
+            return self.aht.relative_humidity
         except Exception as e:
             self.logger.error(f"Error reading humidity: {e}")
             return None
